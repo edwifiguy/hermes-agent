@@ -333,46 +333,56 @@ def update_managed_uv(
         # Not installed yet — ensure_uv() will handle that elsewhere.
         return None
 
-    if force or not _uv_self_update_is_fresh():
-        try:
-            result = subprocess.run(
-                [existing, "self", "update"],
-                capture_output=True,
-                text=True, encoding='utf-8', errors='replace',
-                check=False,
-                timeout=UV_SELF_UPDATE_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired:
-            logger.debug("uv self update timed out after %ss", UV_SELF_UPDATE_TIMEOUT_SECONDS)
-            result = None
-        except OSError as exc:
-            # On Windows, an application control policy (AppLocker / WDAC) or
-            # other execution restriction may raise OSError when attempting to
-            # launch the managed uv binary. This must not crash the updater —
-            # treat it as a non-fatal self-update failure and continue.
-            logger.warning("uv self update failed to start: %s", exc)
-            print(f"  ⚠ Managed uv self-update blocked: {exc}")
-            result = None
-        except Exception as exc:
-            # Catch-all for any other unexpected failures when attempting the
-            # self-update; keep the old binary in service.
-            logger.warning("uv self update failed: %s", exc)
-            result = None
+    # Allow administrators to opt out of automatic `uv self update` via an
+    # environment toggle (HERMES_MANAGED_UV_SELF_UPDATE). This is useful when
+    # systems enforce AppLocker/WDAC policies that prevent launching the bundled
+    # uv binary; a crash during subprocess spawn must not abort `hermes update`.
+    enabled = os.environ.get("HERMES_MANAGED_UV_SELF_UPDATE", "1").lower() in ("1", "true", "yes", "on")
+    if not enabled:
+        logger.info("Managed uv self-update disabled via HERMES_MANAGED_UV_SELF_UPDATE")
+        result = None
+    else:
+        if force or not _uv_self_update_is_fresh():
+            try:
+                result = subprocess.run(
+                    [existing, "self", "update"],
+                    capture_output=True,
+                    text=True, encoding='utf-8', errors='replace',
+                    check=False,
+                    timeout=UV_SELF_UPDATE_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                logger.debug("uv self update timed out after %ss", UV_SELF_UPDATE_TIMEOUT_SECONDS)
+                result = None
+            except OSError as exc:
+                # On Windows, an application control policy (AppLocker / WDAC) or
+                # other execution restriction may raise OSError when attempting to
+                # launch the managed uv binary. This must not crash the updater —
+                # treat it as a non-fatal self-update failure and continue.
+                logger.warning("uv self update failed to start: %s", exc)
+                print(f"  ⚠ Managed uv self-update blocked: {exc}")
+                result = None
+            except Exception as exc:
+                # Catch-all for any other unexpected failures when attempting the
+                # self-update; keep the old binary in service.
+                logger.warning("uv self update failed: %s", exc)
+                result = None
 
-        if result is not None and result.returncode == 0:
-            _touch_uv_self_update_stamp()
-            version = subprocess.run(
-                [existing, "--version"],
-                capture_output=True,
-                text=True, encoding='utf-8', errors='replace',
-                check=False,
-            ).stdout.strip()
-            print(f"  ✓ Managed uv updated ({version})")
-        elif result is not None:
-            # Non-fatal — old uv still works fine.
-            logger.debug(
-                "uv self update failed (rc=%d): %s", result.returncode, result.stderr
-            )
+            if result is not None and result.returncode == 0:
+                _touch_uv_self_update_stamp()
+                version = subprocess.run(
+                    [existing, "--version"],
+                    capture_output=True,
+                    text=True, encoding='utf-8', errors='replace',
+                    check=False,
+                ).stdout.strip()
+                print(f"  ✓ Managed uv updated ({version})")
+            elif result is not None:
+                # Non-fatal — old uv still works fine.
+                logger.debug(
+                    "uv self update failed (rc=%d): %s", result.returncode, result.stderr
+                )
+    
 
     # Keep this hook inside the long-standing API. During an update, main.py is
     # already imported from the old checkout, then ``git pull`` replaces this
