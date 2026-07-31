@@ -345,6 +345,20 @@ def update_managed_uv(
         except subprocess.TimeoutExpired:
             logger.debug("uv self update timed out after %ss", UV_SELF_UPDATE_TIMEOUT_SECONDS)
             result = None
+        except OSError as exc:
+            # On Windows, an application control policy (AppLocker / WDAC) or
+            # other execution restriction may raise OSError when attempting to
+            # launch the managed uv binary. This must not crash the updater —
+            # treat it as a non-fatal self-update failure and continue.
+            logger.warning("uv self update failed to start: %s", exc)
+            print(f"  ⚠ Managed uv self-update blocked: {exc}")
+            result = None
+        except Exception as exc:
+            # Catch-all for any other unexpected failures when attempting the
+            # self-update; keep the old binary in service.
+            logger.warning("uv self update failed: %s", exc)
+            result = None
+
         if result is not None and result.returncode == 0:
             _touch_uv_self_update_stamp()
             version = subprocess.run(
